@@ -24,7 +24,7 @@ class Sales extends Secure_area
 		$sales = $this->Sale->get_all($payment_type,$lines_per_page,$limit_from);
 		$total_rows = $this->Sale->get_found_rows($payment_type);
 		$data['payment_type'] = $payment_type;
-		$data['links'] = $this->_initialize_pagination($payment_type, $lines_per_page, $limit_from, $total_rows);
+		$data['links'] = $this->_initialize_pagination($this->Sale, $lines_per_page, $limit_from, -1, $payment_type);
 	
 		$data['manage_table']=get_sales_manage_table($sales,$this);
 		$this->load->view($data['controller_name'] . '/manage',$data);
@@ -37,23 +37,6 @@ class Sales extends Secure_area
 		$sale_info = $this->Sale->get_info($sale_id)->result_array();
 		$data_row=get_sale_data_row($sale_info[0],$this);
 		echo $data_row;
-	}
-	
-	function _initialize_pagination($payment_type, $lines_per_page, $limit_from = 0, $total_rows = 0)
-	{
-		$this->load->library('pagination');
-		$config['base_url'] = site_url($this->get_controller_name() . '/manage/' . $payment_type);
-		$config['total_rows'] = $total_rows;
-		$config['per_page'] = $lines_per_page;
-		$config['num_links'] = 2;
-		$config['last_link'] = $this->lang->line('common_last_page');
-		$config['first_link'] = $this->lang->line('common_first_page');
-		// page is calculated here instead of in pagination lib
-		$config['cur_page'] = $limit_from > 0  ? $limit_from : 0;
-		$config['page_query_string'] = FALSE;
-		$config['uri_segment'] = 0;
-		$this->pagination->initialize($config);
-		return $this->pagination->create_links();
 	}
 	
 	/**
@@ -74,7 +57,7 @@ class Sales extends Secure_area
 		$lines_per_page = $this->Appconfig->get('lines_per_page');
 		$sales = $this->Sale->search($search, $payment_type, $lines_per_page, $limit_from, $search);
 		$total_rows = $this->Sale->get_found_rows($search);
-		$links = $this->_initialize_pagination($payment_type, $lines_per_page, $limit_from, $total_rows);
+		$links = $this->_initialize_pagination($this->Sale,$lines_per_page,$limit_from,$total_rows,$payment_type);
 		$data_rows=get_sales_manage_table_data_rows($sales,$this);
 		echo json_encode(array('total_rows' => $total_rows, 'rows' => $data_rows, 'pagination' => $links));
 		$this->_remove_duplicate_cookies();
@@ -82,8 +65,12 @@ class Sales extends Secure_area
 
 	function item_search()
 	{
-		$suggestions = $this->Item->get_item_search_suggestions($this->input->post('q'),$this->input->post('limit'));
-		$suggestions = array_merge($suggestions, $this->Item_kit->get_item_kit_search_suggestions($this->input->post('q'),$this->input->post('limit')));
+		if ($this->sale_lib->get_mode() == 'return') {
+			$suggestions = $this->Sale->get_search_suggestions($this->input->post('q'), $this->input->post('limit'));
+		} else {
+			$suggestions = $this->Item->get_item_search_suggestions($this->input->post('q'),$this->input->post('limit'));
+			$suggestions = array_merge($suggestions, $this->Item_kit->get_item_kit_search_suggestions($this->input->post('q'),$this->input->post('limit')));
+		}
 		echo implode("\n",$suggestions);
 	}
 
@@ -759,6 +746,57 @@ class Sales extends Secure_area
 		$invoice_number=$this->input->post('invoice_number');
 		$exists=!empty($invoice_number) && $this->Sale->invoice_number_exists($invoice_number,$sale_id);
 		echo json_encode(array('success'=>!$exists,'message'=>$this->lang->line('sales_invoice_number_duplicate')));
+	}
+	
+	function correct_total($date) 
+	{
+		$new_total = $this->input->post("value", TRUE);
+		preg_match("/.*?(\d+[\.\d]*)./", $new_total, $output_array);
+		if (count($output_array) > 1 && is_numeric(floatval($output_array[1]))) {
+			$this->db->trans_start();
+			$result = correct_total($date, $new_total);
+			$this->db->trans_complete();
+		}
+		echo isset($result) ? $result["new_total"] : $new_total;
+	}
+	
+	function correct_totals($start_date = '2013-12-01', $end_date = '2014-01-01') 
+	{
+		$new_totals = array(750, 1038.90, 985, 1020.10, 1250.15, 1210.9,
+				916.05, 810.2, 1090.10, 2395, 610, 830.2, 810.9, 990.3,
+				1810.2, 2110.1, 1130.9, 1990.1, 1220.3);
+		
+		// would need a post of the totals to be corrected, linked to their dates??
+	 	$i = 0;
+	 	$output = array();
+	 	$this->db->trans_start();
+		//FIXME we need the exact dates here, not the total per se..
+		foreach ($totals as $total) {
+			$output_entry = $this->correct_total($start_date, $new_totals[$i++]);
+			array_push($output, $output_entry);
+		}
+		$this->db->trans_complete();
+		echo json_encode($output);
+	}
+	
+	function correct_data($start_date = "2013-03-01", $end_date = '2013-03-14') 
+	{
+		$this->load->model('Analysis');
+		$category_id = 4;
+		$this->db->trans_start();
+		while (strtotime($start_date) <= strtotime($end_date)) {
+			$scores = array();
+			$analyses = $this->Analysis->get_analysis_by_day($start_date);
+			$sale_items = $this->Sale->get_sale_items_by_day($start_date, $category_id);
+			$result = correct_data($analyses, $sale_items);
+			if ($result > 0)
+			{
+				echo $result . " records linked<br><br>";
+			}
+			$start_date = date ("Y-m-d", strtotime("+1 day", strtotime($start_date)));
+		}
+		$this->db->trans_complete();
+		
 	}
 }
 ?>
